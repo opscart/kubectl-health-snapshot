@@ -1,0 +1,48 @@
+# Generated reports
+cluster-reports/
+*.html
+*.json
+!README.md
+!docs/*.md
+!examples/*.md
+
+# Istio downloads
+istio-*/
+
+# OS files
+.DS_Store
+Thumbs.db
+._*
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+*.sublime-*
+
+# Test outputs
+tests/output/
+tests/temp/
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.old
+*~
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node
+node_modules/
+package-lock.json
+
+# Temporary files
+tmp/
+temp/
