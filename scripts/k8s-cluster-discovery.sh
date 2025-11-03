@@ -15,7 +15,7 @@ OUTPUT_FORMAT="${2:-json}"
 TARGET_NAMESPACE="${3:-}"
 OUTPUT_DIR="./cluster-reports"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-TEMP_DIR="./temp-$$"
+TEMP_DIR="/tmp/k8s-discovery-$$"
 
 if [ -z "$CLUSTER_NAME" ]; then
     echo "Error: Cluster name is required"
@@ -281,51 +281,32 @@ echo "  ✓ Deployments: $DEPLOY_COUNT | StatefulSets: $STS_COUNT | CronJobs: $C
 
 # Pods - COMPLETE LIST with sidecar info
 echo "Analyzing ALL pods..."
-kubectl get pods $NS_FLAG -o json 2>/dev/null | jq '[.items[]? |
-  select(type == "object") | {
+kubectl get pods $NS_FLAG -o json 2>/dev/null | jq -r '.items[]' | jq -s '[.[] | 
+  {
     ns: .metadata.namespace,
     name: .metadata.name,
-    phase: .status.phase,
-    ready: ([.status.conditions[]? | select(.type == "Ready" and .status == "True")] | length > 0),
-    containers: (
-      if .spec.containers != null then
-        [.spec.containers[] | .name]
-      else
-        []
-      end
-    ),
-    container_count: (
-      if .spec.containers != null then
-        .spec.containers | length
-      else
-        0
-      end
-    ),
-    ready_containers: (
-      if .status.containerStatuses != null then
-        [.status.containerStatuses[] | select(.ready == true)] | length
-      else
-        0
-      end
-    ),
+    phase: (.status.phase // "Unknown"),
+    ready: (.status.conditions // [] | map(select(.type == "Ready" and .status == "True")) | length > 0),
+    containers: (.spec.containers // [] | map(.name)),
+    container_count: (.spec.containers // [] | length),
+    ready_containers: (.status.containerStatuses // [] | map(select(.ready == true)) | length),
     has_sidecar: (
-      (.metadata.annotations["sidecar.istio.io/status"] != null) or
-      ([.spec.containers[]? | select(.name == "istio-proxy")] | length > 0)
+      ((.metadata.annotations // {})["sidecar.istio.io/status"] != null) or
+      ((.spec.containers // []) | map(select(.name == "istio-proxy")) | length > 0)
     ),
     sidecar_version: (
-      if ([.spec.containers[]? | select(.name == "istio-proxy")] | length > 0) then
-        ([.spec.containers[] | select(.name == "istio-proxy") | .image] | .[0] | split(":")[1] // "unknown")
+      if ((.spec.containers // []) | map(select(.name == "istio-proxy")) | length > 0) then
+        ((.spec.containers // []) | map(select(.name == "istio-proxy")) | .[0].image | split(":")[1] // "unknown")
       else
         null
       end
     ),
-    problem: (.status.phase != "Running" and .status.phase != "Succeeded"),
-    reason: ([.status.containerStatuses[]? | .state.waiting.reason] | map(select(. != null)) | .[0] // .status.phase),
-    restart_count: ([.status.containerStatuses[]? | .restartCount] | add // 0),
-    node_name: .spec.nodeName,
-    tolerations: [.spec.tolerations[]? | {key, operator, value, effect}]
+    problem: ((.status.phase // "Unknown") != "Running" and (.status.phase // "Unknown") != "Succeeded"),
+    reason: ((.status.containerStatuses // [] | map(select(.state.waiting != null) | .state.waiting.reason) | .[0]) // .status.phase // "Unknown"),
+    restart_count: ((.status.containerStatuses // [] | map(.restartCount) | add) // 0),
+    node_name: (.spec.nodeName // "N/A"),
+    tolerations: (.spec.tolerations // [] | map({key, operator, value, effect}))
   }]' > "$TEMP_DIR/all_pods.json" 2>/dev/null || echo '[]' > "$TEMP_DIR/all_pods.json"
-
 # Group pods by namespace
 cat "$TEMP_DIR/all_pods.json" | jq 'group_by(.ns) | map({
   namespace: .[0].ns,

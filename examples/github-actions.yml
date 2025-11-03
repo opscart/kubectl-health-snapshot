@@ -1,0 +1,77 @@
+name: Kubernetes Cluster Health Check
+
+on:
+  schedule:
+    # Run every day at 8 AM UTC
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  cluster-health-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBE_CONFIG }}
+    
+    - name: Install jq
+      run: sudo apt-get update && sudo apt-get install -y jq
+    
+    - name: Generate cluster health report
+      run: |
+        cd scripts
+        chmod +x k8s-cluster-discovery.sh
+        ./k8s-cluster-discovery.sh production json
+        ./k8s-cluster-discovery.sh production html
+    
+    - name: Check cluster health
+      id: health_check
+      run: |
+        cd scripts/cluster-reports
+        LATEST_JSON=$(ls -t production_*.json | head -1)
+        PROBLEMS=$(jq '[.pod_health[].problems[]] | length' "$LATEST_JSON")
+        echo "problems=$PROBLEMS" >> $GITHUB_OUTPUT
+        
+        if [ "$PROBLEMS" -gt 5 ]; then
+          echo "::warning::Cluster has $PROBLEMS problematic pods"
+          exit 1
+        else
+          echo "Cluster healthy: $PROBLEMS issues found"
+        fi
+    
+    - name: Upload HTML Report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: cluster-health-report
+        path: scripts/cluster-reports/*.html
+        retention-days: 30
+    
+    - name: Upload JSON Report
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: cluster-health-data
+        path: scripts/cluster-reports/*.json
+        retention-days: 30
+    
+    - name: Notify on failure
+      if: failure()
+      uses: actions/github-script@v6
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: 'Cluster Health Check Failed',
+            body: 'Cluster health check detected issues. Check the workflow artifacts for details.',
+            labels: ['cluster-health', 'alert']
+          })
